@@ -38,22 +38,17 @@ class Simple2DNet(nn.Module):
 
 # ===================== Realistic FDK via Radon Transform =====================
 
-
-
 def fdk_reconstruction(ap, lat, angles=None):
     if angles is None:
         angles = np.linspace(0., 180., max(ap.shape), endpoint=False)
 
-    # Reconstruct 2D slices from AP and LAT using inverse Radon
     slices = []
     for i in range(ap.shape[0]):
-        # Treat each row of AP as a sinogram
         sinogram = np.tile(ap[i], (len(angles), 1)).T
         recon = iradon(sinogram, theta=angles, circle=True)
         slices.append(recon)
     volume = np.stack(slices, axis=0)
 
-    # Average with reconstruction from LAT for more realism
     slices_lat = []
     for i in range(lat.shape[1]):
         sinogram = np.tile(lat[:, i], (len(angles), 1)).T
@@ -87,14 +82,14 @@ class PhantomDataset(Dataset):
         lat = torch.tensor(lat, dtype=torch.float32)
         return vol, ap, lat
 
-# ===================== Training Function =====================
+# ===================== Training + Testing =====================
 
-def train_model(npz_file, epochs=5, lr=1e-3, batch_size=1):
+def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔧 Using device: {device}")
 
-    dataset = PhantomDataset(npz_file)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(PhantomDataset(train_npz), batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(PhantomDataset(test_npz), batch_size=1, shuffle=False)
 
     net3d = Simple3DNet().to(device)
     net2d = Simple2DNet().to(device)
@@ -102,22 +97,19 @@ def train_model(npz_file, epochs=5, lr=1e-3, batch_size=1):
     criterion = nn.MSELoss()
     optimizer = optim.Adam(list(net3d.parameters()) + list(net2d.parameters()), lr=lr)
 
-    final_gt = None
-    final_output = None
-
+    # === Training ===
     for epoch in range(epochs):
         total_loss = 0.0
-        for gt_vol, ap, lat in loader:
+        for gt_vol, ap, lat in train_loader:
             gt_vol = gt_vol.to(device)
             ap = ap.to(device)
             lat = lat.to(device)
 
             fdk_vol = []
             for b in range(gt_vol.size(0)):
-                fdk = fdk_reconstruction1(ap[b].cpu().numpy(), lat[b].cpu().numpy())
+                fdk = fdk_reconstruction(ap[b].cpu().numpy(), lat[b].cpu().numpy())
                 fdk_vol.append(fdk)
-            fdk_vol = np.array(fdk_vol, dtype=np.float32)
-            fdk_vol = torch.tensor(fdk_vol, dtype=torch.float32).unsqueeze(1).to(device)
+            fdk_vol = torch.tensor(np.array(fdk_vol), dtype=torch.float32).unsqueeze(1).to(device)
 
             coarse_vol = net3d(fdk_vol)
 
@@ -140,28 +132,55 @@ def train_model(npz_file, epochs=5, lr=1e-3, batch_size=1):
             optimizer.step()
 
             total_loss += loss.item()
+        print(f"📘 Epoch {epoch+1}/{epochs} — Loss: {total_loss/len(train_loader):.6f}")
 
-            final_gt = gt_vol[0, 0].detach().cpu()
-            final_output = output[0, 0].detach().cpu()
+    # === Testing ===
+    test_loss = 0.0
+    final_gt = None
+    final_output = None
 
-        print(f"📘 Epoch {epoch+1}/{epochs} — Loss: {total_loss/len(loader):.6f}")
+    with torch.no_grad():
+        for gt_vol, ap, lat in test_loader:
+            gt_vol = gt_vol.to(device)
+            ap = ap.to(device)
+            lat = lat.to(device)
 
+            fdk = fdk_reconstruction(ap[0].cpu().numpy(), lat[0].cpu().numpy())
+            fdk = torch.tensor(fdk[np.newaxis, np.newaxis], dtype=torch.float32).to(device)
+
+            coarse_vol = net3d(fdk)
+
+            slices = []
+            for i in range(coarse_vol.shape[2]):
+                slice_2d = coarse_vol[0, 0, i].unsqueeze(0).unsqueeze(0)
+                refined = net2d(slice_2d)
+                slices.append(refined.squeeze(0))
+            refined_vol = torch.stack(slices, dim=0).unsqueeze(0).unsqueeze(0).to(device)
+
+            refined_vol = refined_vol.view_as(gt_vol)
+            loss = criterion(refined_vol, gt_vol)
+            test_loss += loss.item()
+
+            if final_gt is None:
+                final_gt = gt_vol[0, 0].detach().cpu()
+                final_output = refined_vol[0, 0].detach().cpu()
+
+    print(f"🧪 Test Loss: {test_loss / len(test_loader):.6f}")
     return final_gt, final_output
 
 # ===================== MAIN =====================
 
 if __name__ == "__main__":
-    gt_volume, recon_volume = train_model("phantom_data.npz", epochs=5)
+    gt_volume, recon_volume = train_and_test("phantom_data.npz", "phantom_data_testing.npz", epochs=5)
 
+    # === Visualize first 10 slices from testing data ===
     for i in range(10):
         fig, axs = plt.subplots(1, 2, figsize=(8, 4))
         axs[0].imshow(gt_volume[i], cmap='gray')
         axs[0].set_title(f"GT Slice {i}")
         axs[0].axis('off')
-
         axs[1].imshow(recon_volume[i], cmap='gray')
         axs[1].set_title(f"Recon Slice {i}")
         axs[1].axis('off')
-
         plt.tight_layout()
         plt.show()
