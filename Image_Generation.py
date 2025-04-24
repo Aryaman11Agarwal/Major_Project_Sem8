@@ -49,8 +49,8 @@ def create_3d_phantom(slices=64, size=64, noise_level=0.05, rotate_angle_range=(
 
 # ====== Generate 2D Projections ======
 def generate_projections(volume):
-    ap_proj = np.sum(volume, axis=0).astype(np.float32)
-    lat_proj = np.sum(volume, axis=2).astype(np.float32)
+    ap_proj = np.mean(volume, axis=0).astype(np.float32)
+    lat_proj = np.mean(volume, axis=2).astype(np.float32)
     return ap_proj, lat_proj
 
 # ====== Display helper ======
