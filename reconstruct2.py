@@ -94,7 +94,7 @@ def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
     net3d = Simple3DNet().to(device)
     net2d = Simple2DNet().to(device)
 
-    criterion = nn.MSELoss()
+    criterion = nn.L1Loss()
     optimizer = optim.Adam(list(net3d.parameters()) + list(net2d.parameters()), lr=lr)
 
     # === Training ===
