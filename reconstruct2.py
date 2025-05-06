@@ -6,61 +6,116 @@ from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 from skimage.transform import radon, iradon
 
-# ===================== CNN MODELS =====================
-
-class Simple3DNet(nn.Module):
+# ===================== Deep UNet3D =====================
+class UNet3D(nn.Module):
     def __init__(self):
-        super(Simple3DNet, self).__init__()
-        self.conv1 = nn.Conv3d(1, 8, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv3d(8, 16, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv3d(16, 1, kernel_size=3, padding=1)
-        self.relu = nn.ReLU()
+        super(UNet3D, self).__init__()
+        self.enc1 = nn.Sequential(nn.Conv3d(1, 32, 3, padding=1), nn.ReLU())
+        self.enc2 = nn.Sequential(nn.Conv3d(32, 64, 3, stride=2, padding=1), nn.ReLU())
+        self.enc3 = nn.Sequential(nn.Conv3d(64, 128, 3, stride=2, padding=1), nn.ReLU())
+        self.enc4 = nn.Sequential(nn.Conv3d(128, 256, 3, stride=2, padding=1), nn.ReLU())
+
+        self.middle = nn.Sequential(
+            nn.Conv3d(256, 512, 3, padding=1), nn.ReLU(),
+            nn.Conv3d(512, 512, 3, padding=1), nn.ReLU()
+        )
+
+        self.up3 = nn.ConvTranspose3d(512, 256, kernel_size=2, stride=2)
+        self.dec3 = nn.Sequential(nn.Conv3d(512, 256, 3, padding=1), nn.ReLU())
+
+        self.up2 = nn.ConvTranspose3d(256, 128, kernel_size=2, stride=2)
+        self.dec2 = nn.Sequential(nn.Conv3d(256, 128, 3, padding=1), nn.ReLU())
+
+        self.up1 = nn.ConvTranspose3d(128, 64, kernel_size=2, stride=2)
+        self.dec1 = nn.Sequential(nn.Conv3d(96, 64, 3, padding=1), nn.ReLU())
+
+        self.final = nn.Conv3d(64, 1, 1)
 
     def forward(self, x):
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.conv3(x)
-        return x
+        e1 = self.enc1(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
+        e4 = self.enc4(e3)
 
-class Simple2DNet(nn.Module):
+        m = self.middle(e4)
+
+        d3 = self.up3(m)
+        d3 = self.dec3(torch.cat([d3, e3], dim=1))
+
+        d2 = self.up2(d3)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+
+        d1 = self.up1(d2)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+
+        return self.final(d1)
+
+# ===================== Deep UNet2D =====================
+class UNet2D(nn.Module):
     def __init__(self):
-        super(Simple2DNet, self).__init__()
-        self.conv1 = nn.Conv2d(1, 8, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(8, 16, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(16, 1, kernel_size=3, padding=1)
-        self.relu = nn.ReLU()
+        super(UNet2D, self).__init__()
+        self.enc1 = nn.Sequential(nn.Conv2d(1, 32, 3, padding=1), nn.ReLU())
+        self.enc2 = nn.Sequential(nn.Conv2d(32, 64, 3, stride=2, padding=1), nn.ReLU())
+        self.enc3 = nn.Sequential(nn.Conv2d(64, 128, 3, stride=2, padding=1), nn.ReLU())
+        self.enc4 = nn.Sequential(nn.Conv2d(128, 256, 3, stride=2, padding=1), nn.ReLU())
+
+        self.middle = nn.Sequential(
+            nn.Conv2d(256, 512, 3, padding=1), nn.ReLU(),
+            nn.Conv2d(512, 512, 3, padding=1), nn.ReLU()
+        )
+
+        self.up3 = nn.ConvTranspose2d(512, 256, kernel_size=2, stride=2)
+        self.dec3 = nn.Sequential(nn.Conv2d(512, 256, 3, padding=1), nn.ReLU())
+
+        self.up2 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
+        self.dec2 = nn.Sequential(nn.Conv2d(256, 128, 3, padding=1), nn.ReLU())
+
+        self.up1 = nn.ConvTranspose2d(128, 64, kernel_size=2, stride=2)
+        self.dec1 = nn.Sequential(nn.Conv2d(96, 64, 3, padding=1), nn.ReLU())
+
+        self.final = nn.Conv2d(64, 1, 1)
 
     def forward(self, x):
-        x = self.relu(self.conv1(x))
-        x = self.relu(self.conv2(x))
-        x = self.conv3(x)
-        return x
+        e1 = self.enc1(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
+        e4 = self.enc4(e3)
 
-# ===================== Realistic FDK via Radon Transform =====================
+        m = self.middle(e4)
 
+        d3 = self.up3(m)
+        d3 = self.dec3(torch.cat([d3, e3], dim=1))
+
+        d2 = self.up2(d3)
+        d2 = self.dec2(torch.cat([d2, e2], dim=1))
+
+        d1 = self.up1(d2)
+        d1 = self.dec1(torch.cat([d1, e1], dim=1))
+
+        return self.final(d1)
+
+# ===================== FDK via Radon/iradon =====================
 def fdk_reconstruction(ap, lat, angles=None):
     if angles is None:
-        angles = np.linspace(0., 180., max(ap.shape), endpoint=False)
+        angles = np.linspace(0., 180., ap.shape[0], endpoint=False)
 
-    slices = []
+    volume_ap = []
     for i in range(ap.shape[0]):
-        sinogram = np.tile(ap[i], (len(angles), 1)).T
-        recon = iradon(sinogram, theta=angles, circle=True)
-        slices.append(recon)
-    volume = np.stack(slices, axis=0)
+        sinogram = np.stack([ap[i], np.flip(ap[i])], axis=0)
+        recon = iradon(sinogram.T, theta=[0, 180], circle=True)
+        volume_ap.append(recon)
+    volume_ap = np.stack(volume_ap, axis=0)
 
-    slices_lat = []
-    for i in range(lat.shape[1]):
-        sinogram = np.tile(lat[:, i], (len(angles), 1)).T
-        recon = iradon(sinogram, theta=angles, circle=True)
-        slices_lat.append(recon)
-    volume_lat = np.stack(slices_lat, axis=2)
+    volume_lat = []
+    for i in range(ap.shape[1]):
+        sinogram = np.stack([lat[:, i], np.flip(lat[:, i])], axis=0)
+        recon = iradon(sinogram.T, theta=[0, 180], circle=True)
+        volume_lat.append(recon)
+    volume_lat = np.stack(volume_lat, axis=2)
 
-    volume_combined = (volume + volume_lat) / 2.0
-    return volume_combined.astype(np.float32)
+    return ((volume_ap + volume_lat) / 2.0).astype(np.float32)
 
-# ===================== Dataset Class =====================
-
+# ===================== Dataset =====================
 class PhantomDataset(Dataset):
     def __init__(self, npz_path):
         self.data = []
@@ -77,13 +132,13 @@ class PhantomDataset(Dataset):
 
     def __getitem__(self, idx):
         vol, ap, lat = self.data[idx]
-        vol = torch.tensor(vol[np.newaxis], dtype=torch.float32)
-        ap = torch.tensor(ap, dtype=torch.float32)
-        lat = torch.tensor(lat, dtype=torch.float32)
-        return vol, ap, lat
+        return (
+            torch.tensor(vol[np.newaxis], dtype=torch.float32),
+            torch.tensor(ap, dtype=torch.float32),
+            torch.tensor(lat, dtype=torch.float32)
+        )
 
-# ===================== Training + Testing =====================
-
+# ===================== Training & Testing =====================
 def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"🔧 Using device: {device}")
@@ -91,13 +146,12 @@ def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
     train_loader = DataLoader(PhantomDataset(train_npz), batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(PhantomDataset(test_npz), batch_size=1, shuffle=False)
 
-    net3d = Simple3DNet().to(device)
-    net2d = Simple2DNet().to(device)
+    net3d = UNet3D().to(device)
+    net2d = UNet2D().to(device)
 
     criterion = nn.L1Loss()
     optimizer = optim.Adam(list(net3d.parameters()) + list(net2d.parameters()), lr=lr)
 
-    # === Training ===
     for epoch in range(epochs):
         total_loss = 0.0
         for gt_vol, ap, lat in train_loader:
@@ -124,17 +178,14 @@ def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
                 refined_slices.append(refined_vol)
             output = torch.stack(refined_slices).unsqueeze(1).to(device)
 
-            output = output.view_as(gt_vol)
-
-            loss = criterion(output, gt_vol)
+            loss = criterion(output.view_as(gt_vol), gt_vol)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
+
         print(f"📘 Epoch {epoch+1}/{epochs} — Loss: {total_loss/len(train_loader):.6f}")
 
-    # === Testing ===
     test_loss = 0.0
     final_gt = None
     final_output = None
@@ -157,8 +208,7 @@ def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
                 slices.append(refined.squeeze(0))
             refined_vol = torch.stack(slices, dim=0).unsqueeze(0).unsqueeze(0).to(device)
 
-            refined_vol = refined_vol.view_as(gt_vol)
-            loss = criterion(refined_vol, gt_vol)
+            loss = criterion(refined_vol.view_as(gt_vol), gt_vol)
             test_loss += loss.item()
 
             if final_gt is None:
@@ -169,17 +219,15 @@ def train_and_test(train_npz, test_npz, epochs=5, lr=1e-3, batch_size=1):
     return final_gt, final_output
 
 # ===================== MAIN =====================
-
 if __name__ == "__main__":
     gt_volume, recon_volume = train_and_test("phantom_data.npz", "phantom_data_testing.npz", epochs=5)
 
-    # === Visualize first 10 slices from testing data ===
     for i in range(10):
         fig, axs = plt.subplots(1, 2, figsize=(8, 4))
-        axs[0].imshow(gt_volume[i], cmap='gray')
+        axs[0].imshow(gt_volume[i], cmap='gray', vmin=0, vmax=1)
         axs[0].set_title(f"GT Slice {i}")
         axs[0].axis('off')
-        axs[1].imshow(recon_volume[i], cmap='gray')
+        axs[1].imshow(recon_volume[i], cmap='gray', vmin=0, vmax=1)
         axs[1].set_title(f"Recon Slice {i}")
         axs[1].axis('off')
         plt.tight_layout()
