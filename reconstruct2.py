@@ -96,8 +96,7 @@ class UNet2D(nn.Module):
 
 # ===================== FDK via Radon/iradon =====================
 def fdk_reconstruction(ap, lat, angles=None):
-    if angles is None:
-        angles = np.linspace(0., 180., ap.shape[0], endpoint=False)
+    
 
     volume_ap = []
     for i in range(ap.shape[0]):
